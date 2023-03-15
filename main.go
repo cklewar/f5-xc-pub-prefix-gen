@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"text/template"
 )
 
 const selector = "#content > div > div > div.data > table:nth-child(6)"
@@ -32,6 +33,22 @@ type PublicIPv4EgressSubnetRanges struct {
 
 type extendTable struct {
 	*htmltable.Page
+}
+
+func ExportIPv4Prefixes2Hcl(data []PublicIPv4SubnetRanges, ipv4PrefixesFile string, templateFile string) {
+	tpl := template.Must(template.ParseFiles(templateFile))
+
+	f, err := os.Create(ipv4PrefixesFile)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	//err1 := tpl.Execute(os.Stdout, m)
+	err1 := tpl.Execute(f, data)
+	if err1 != nil {
+		fmt.Println(err1)
+	}
 }
 
 func (p *extendTable) Each4(a, b, c, d string, f func(a, b, c, d string) error) error {
@@ -103,9 +120,15 @@ func main() {
 		log.Fatalf("Error reading regions json data %s\n", err.Error())
 	}
 
+	rowCounter := 0
+	_geography := ""
+	pisr := PublicIPv4SubnetRanges{}
 	table, _ := htmltable.NewFromString(b.String())
 	eTable := &extendTable{table}
 	_ = eTable.Each4("Geography", "Protocol", "IP Address", "Ports", func(geography string, protocol string, ipPrefixes string, ports string) error {
+		if rowCounter == 0 {
+			_geography = geography
+		}
 		currentPrefixes := map[string]bool{}
 		_ports := map[string]bool{}
 		fmt.Printf("Geography: %s ----- Protocol: %s ----- Ports: %s ----- IP Prefixes: %s\n", geography, protocol, ports, ipPrefixes)
@@ -116,9 +139,19 @@ func main() {
 		fmt.Println("Current prefix", currentPrefix, "Length current prefix:",
 			lenCurrentPrefix, "Length new prefix list:", lenNewIpPrefixes, "Length prefix list:", lenIpPrefixes)
 		ipPrefixes = ipPrefixes[lenCurrentPrefix:]
-		pisr := PublicIPv4SubnetRanges{
-			Geography: geography,
-			Protocol:  protocol,
+
+		if rowCounter == 1 && len(geography) == 0 {
+			pisr = PublicIPv4SubnetRanges{
+				Geography: _geography,
+				Protocol:  protocol,
+			}
+			rowCounter = 0
+		} else {
+			pisr = PublicIPv4SubnetRanges{
+				Geography: geography,
+				Protocol:  protocol,
+			}
+			rowCounter = rowCounter + 1
 		}
 
 		_, ok := currentPrefixes[currentPrefix]
@@ -165,8 +198,8 @@ func main() {
 		}
 
 		pisrs = append(pisrs, pisr)
-
 		return nil
 	})
-	// fmt.Println(pisrs)
+	fmt.Println(pisrs)
+	ExportIPv4Prefixes2Hcl(pisrs, "variables.tf", "prefixes.tpl")
 }
